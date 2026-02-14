@@ -5,37 +5,44 @@ namespace Tesseract.Cache
 {
     /// <summary>
     /// Generic LRU cache for Resources.Load with configurable max size.
+    /// Uses LinkedList for O(1) cache hit reordering.
     /// </summary>
     public class ResourceCache<T> where T : Object
     {
         private readonly int _maxSize;
-        private readonly Dictionary<string, T> _cache;
-        private readonly Queue<string> _evictionQueue;
+        private readonly Dictionary<string, LinkedListNode<KeyValuePair<string, T>>> _cache;
+        private readonly LinkedList<KeyValuePair<string, T>> _lruList;
 
         public ResourceCache(int maxSize = 20)
         {
-            _maxSize = maxSize;
-            _cache = new Dictionary<string, T>();
-            _evictionQueue = new Queue<string>();
+            _maxSize = Mathf.Max(1, maxSize);
+            _cache = new Dictionary<string, LinkedListNode<KeyValuePair<string, T>>>(_maxSize);
+            _lruList = new LinkedList<KeyValuePair<string, T>>();
         }
 
         /// <summary>
         /// Load a resource from cache or Resources folder.
+        /// On cache hit, moves the item to the front (most recently used).
         /// </summary>
         public T Load(string path)
         {
-            if (_cache.TryGetValue(path, out T result))
-                return result;
+            if (_cache.TryGetValue(path, out var node))
+            {
+                // Move to front (most recently used)
+                _lruList.Remove(node);
+                _lruList.AddFirst(node);
+                return node.Value.Value;
+            }
 
-            result = Resources.Load<T>(path);
+            T result = Resources.Load<T>(path);
             if (result == null)
             {
                 Debug.LogWarning($"[ResourceCache] Failed to load: {path}");
                 return null;
             }
 
-            _cache.Add(path, result);
-            _evictionQueue.Enqueue(path);
+            var newNode = _lruList.AddFirst(new KeyValuePair<string, T>(path, result));
+            _cache[path] = newNode;
             Evict();
             return result;
         }
@@ -51,7 +58,7 @@ namespace Tesseract.Cache
         public void Clear()
         {
             _cache.Clear();
-            _evictionQueue.Clear();
+            _lruList.Clear();
         }
 
         /// <summary>
@@ -61,10 +68,11 @@ namespace Tesseract.Cache
 
         private void Evict()
         {
-            while (_evictionQueue.Count > _maxSize)
+            while (_cache.Count > _maxSize)
             {
-                string oldestKey = _evictionQueue.Dequeue();
-                _cache.Remove(oldestKey);
+                var last = _lruList.Last;
+                _cache.Remove(last.Value.Key);
+                _lruList.RemoveLast();
             }
         }
     }
